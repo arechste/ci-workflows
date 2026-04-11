@@ -1,0 +1,9 @@
+name: Minimal Test
+on:
+  workflow_call:
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Hello from arechste/ci-workflows"
