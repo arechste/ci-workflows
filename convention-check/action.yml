@@ -22,12 +22,15 @@ runs:
       env:
         PR_TITLE: ${{ github.event.pull_request.title }}
       run: |
+        # Conventional commit format: type(scope): description
+        # Also accepts: type: description (no scope)
+        # Types: feat, fix, refactor, docs, test, chore, ci, perf, style, build, revert, wip
         pattern='^(feat|fix|refactor|docs|test|chore|ci|perf|style|build|revert|wip)(\([a-zA-Z0-9._-]+\))?!?: .+'
 
         if [[ "${PR_TITLE}" =~ ${pattern} ]]; then
-          echo "PR title follows conventional format: ${PR_TITLE}"
+          echo "✅ PR title follows conventional format: ${PR_TITLE}"
         else
-          echo "PR title does not follow conventional commit format."
+          echo "❌ PR title does not follow conventional commit format."
           echo ""
           echo "Expected: type(scope): description"
           echo "Got:      ${PR_TITLE}"
@@ -52,36 +55,40 @@ runs:
         commits=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits" --jq '.[].commit.message' 2>/dev/null || echo "")
 
         if [[ -z "${commits}" ]]; then
-          echo "Could not fetch commits, skipping check"
+          echo "⚠️ Could not fetch commits, skipping check"
           exit 0
         fi
 
         failed=0
         total=0
         while IFS= read -r msg; do
+          # Only check first line of commit message
           first_line=$(echo "${msg}" | head -1)
           total=$((total + 1))
 
+          # Skip merge commits
           if [[ "${first_line}" =~ ${merge_pattern} ]]; then
-            echo "Skipping merge commit: ${first_line}"
+            echo "⏭️ Skipping merge commit: ${first_line}"
             continue
           fi
 
           if [[ "${first_line}" =~ ${pattern} ]]; then
-            echo "OK: ${first_line}"
+            echo "✅ ${first_line}"
           else
-            echo "BAD: ${first_line}"
+            echo "❌ ${first_line}"
             failed=$((failed + 1))
           fi
         done <<< "${commits}"
 
         if [[ ${failed} -gt 0 ]]; then
           echo ""
-          echo "${failed}/${total} commits do not follow conventional format."
+          echo "❌ ${failed}/${total} commits do not follow conventional format."
           echo "Note: These will be squashed on merge. Ensure the PR title is correct."
+          # Warning only — don't fail the check for commit messages
+          # since squash merge uses PR title as the final commit message
         else
           echo ""
-          echo "All ${total} commits follow conventional format."
+          echo "✅ All ${total} commits follow conventional format."
         fi
 
     - name: Check required labels
@@ -97,12 +104,12 @@ runs:
         for label in "${label_array[@]}"; do
           if [[ "${label}" == type/* ]]; then
             has_type=true
-            echo "Found type label: ${label}"
+            echo "✅ Found type label: ${label}"
           fi
         done
 
         if [[ "${has_type}" != "true" ]]; then
-          echo "No type/* label found on this PR."
+          echo "❌ No type/* label found on this PR."
           echo ""
           echo "Please add one of: type/feature, type/fix, type/refactor, type/docs, type/test, type/ci, type/chore, type/security, type/config"
           exit 1
