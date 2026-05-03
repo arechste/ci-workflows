@@ -13,6 +13,10 @@ inputs:
     description: 'Require at least one type/* label on the PR'
     required: false
     default: 'false'
+  check-delegation-fixes:
+    description: 'Block Fixes/Closes/Resolves close-keywords that auto-close delegation/* issues'
+    required: false
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -112,5 +116,65 @@ runs:
           echo "❌ No type/* label found on this PR."
           echo ""
           echo "Please add one of: type/feature, type/fix, type/refactor, type/docs, type/test, type/ci, type/chore, type/security, type/config"
+          exit 1
+        fi
+
+    - name: Check delegation auto-close
+      if: inputs.check-delegation-fixes == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        REPO: ${{ github.repository }}
+      run: |
+        # Block GitHub close-keywords (close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #N
+        # when issue N carries a delegation/* label. Auto-close on merge bypasses the
+        # delegator's review → done verification gate.
+        # See docs/conventions/delegation-protocol.md and .claude/rules/delegation.md.
+
+        if [[ -z "${PR_BODY}" ]]; then
+          echo "⏭️ Empty PR body, skipping delegation check"
+          exit 0
+        fi
+
+        keyword_re='(close[sd]?|fix(es|ed)?|resolve[sd]?)'
+        issue_re="${keyword_re}[[:space:]]+#([0-9]+)"
+
+        # Extract issue numbers referenced by close-keywords (same-repo only).
+        # grep -oP would be cleaner but isn't portable; use grep -Eoi + sed.
+        matches=$(printf '%s\n' "${PR_BODY}" | grep -Eoi "${issue_re}" || true)
+
+        if [[ -z "${matches}" ]]; then
+          echo "✅ No close-keyword references in PR body"
+          exit 0
+        fi
+
+        issues=$(printf '%s\n' "${matches}" | grep -Eo '[0-9]+' | sort -u)
+
+        violations=0
+        for n in ${issues}; do
+          labels=$(gh api "repos/${REPO}/issues/${n}" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "__api_failure__")
+
+          if [[ "${labels}" == "__api_failure__" ]]; then
+            echo "⚠️ Could not fetch labels for #${n} — skipping (don't false-block on infra flakes)"
+            continue
+          fi
+
+          if [[ ",${labels}," == *",delegation/"* ]]; then
+            echo "❌ PR body uses a close-keyword for delegation issue #${n} (labels: ${labels})"
+            violations=$((violations + 1))
+          else
+            echo "✅ #${n} is not a delegation issue"
+          fi
+        done
+
+        if [[ ${violations} -gt 0 ]]; then
+          echo ""
+          echo "Delegated issues MUST NOT auto-close on merge — the delegator owns the"
+          echo "delegation/review → delegation/done transition."
+          echo ""
+          echo "Fix: replace 'Fixes #N' / 'Closes #N' / 'Resolves #N' with 'Refs #N' in"
+          echo "the PR body, transition the label to delegation/review, and post the"
+          echo "completion comment per docs/conventions/delegation-protocol.md."
           exit 1
         fi
